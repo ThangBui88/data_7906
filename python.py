@@ -89,6 +89,3 @@ if prompt := st.chat_input("Nhập câu hỏi của bạn vào đây..."):
                 error_msg = f"Đã xảy ra lỗi khi gọi Gemini API: {e}"
                 st.error(error_msg)
                 st.session_state.messages.append({"role": "model", "content": error_msg})
-
-
-# --- KẾT THÚC LOGIC KHUNG CHAT ---
