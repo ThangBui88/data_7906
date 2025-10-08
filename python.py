@@ -11,6 +11,27 @@ st.set_page_config(
 
 st.title("Ứng dụng Phân Tích Báo Cáo Tài chính 📊")
 
+# Lấy API Key
+api_key = st.secrets.get("GEMINI_API_KEY")
+
+# --- Khởi tạo Client Gemini duy trì qua các lần chạy (SỬA LỖI CLIENT CLOSED) ---
+@st.cache_resource(show_spinner=False)
+def get_gemini_client(api_key):
+    """Khởi tạo và lưu trữ đối tượng genai.Client."""
+    if not api_key:
+        st.error("Lỗi: Không tìm thấy Khóa API. Vui lòng cấu hình Khóa 'GEMINI_API_KEY' trong Streamlit Secrets.")
+        return None
+    try:
+        # Tắt logging mặc định nếu cần
+        # genai.set_logging('error') 
+        return genai.Client(api_key=api_key)
+    except Exception as e:
+        st.error(f"Lỗi khởi tạo Gemini Client: {e}")
+        return None
+
+# Lấy đối tượng client đã được cache
+client = get_gemini_client(api_key)
+
 # --- Hàm tính toán chính (Sử dụng Caching để Tối ưu hiệu suất) ---
 @st.cache_data
 def process_financial_data(df):
@@ -48,10 +69,12 @@ def process_financial_data(df):
     return df
 
 # --- Hàm gọi API Gemini cho Nhận xét Tự động (Chức năng 5) ---
-def get_ai_analysis(data_for_ai, api_key):
+def get_ai_analysis(data_for_ai, client):
     """Gửi dữ liệu phân tích đến Gemini API và nhận nhận xét."""
+    if not client:
+        return "Lỗi: Gemini Client không được khởi tạo. Vui lòng kiểm tra Khóa API."
+        
     try:
-        client = genai.Client(api_key=api_key)
         model_name = 'gemini-2.5-flash' 
 
         prompt = f"""
@@ -79,8 +102,6 @@ uploaded_file = st.file_uploader(
     type=['xlsx', 'xls']
 )
 
-# Khởi tạo API Key và Client (Cần thiết cho cả Analysis và Chat)
-api_key = st.secrets.get("GEMINI_API_KEY")
 
 if uploaded_file is not None:
     try:
@@ -164,9 +185,9 @@ if uploaded_file is not None:
             }).to_markdown(index=False) 
 
             if st.button("Yêu cầu AI Phân tích"):
-                if api_key:
+                if client:
                     with st.spinner('Đang gửi dữ liệu và chờ Gemini phân tích...'):
-                        ai_result = get_ai_analysis(data_for_ai, api_key)
+                        ai_result = get_ai_analysis(data_for_ai, client)
                         st.markdown("**Kết quả Phân tích từ Gemini AI:**")
                         st.info(ai_result)
                 else:
@@ -187,22 +208,36 @@ else:
 st.divider()
 st.subheader("6. Khung Chat Hỏi Đáp Gemini AI (Chuyên viên Tài chính)")
 
-if not api_key:
+if not client:
     st.error("Để sử dụng khung chat, vui lòng cấu hình Khóa 'GEMINI_API_KEY' trong Streamlit Secrets.")
 else:
-    # 1. Khởi tạo đối tượng Chat và Lịch sử tin nhắn
-    client = genai.Client(api_key=api_key)
+    # Cấu hình chat
     MODEL_NAME = 'gemini-2.5-flash'
-    SYSTEM_PROMPT = "Bạn là một chuyên gia phân tích tài chính thân thiện và giàu kinh nghiệm. Hãy trả lời các câu hỏi về tài chính, kinh tế, và các chỉ số. Hãy giữ câu trả lời ngắn gọn và chính xác."
-
+    SYSTEM_PROMPT = "Bạn là một chuyên gia phân tích tài chính thân thiện và giàu kinh nghiệm. Hãy trả lời các câu hỏi về tài chính, kinh tế, và các chỉ số. Hãy giữ câu trả lời ngắn gọn và chính xác. Nếu có dữ liệu Báo cáo Tài chính đã tải lên, hãy sử dụng thông tin đó để hỗ trợ trả lời các câu hỏi cụ thể."
+    
+    # 1. Khởi tạo đối tượng Chat và Lịch sử tin nhắn (Sử dụng client đã được cache)
     if "chat_session" not in st.session_state:
-        st.session_state["chat_session"] = client.chats.create(
-            model=MODEL_NAME,
-            config={"system_instruction": SYSTEM_PROMPT}
-        )
-        # Bổ sung tin nhắn chào mừng
-        st.session_state.messages = [{"role": "model", "content": "Xin chào! Tôi là Chuyên viên Tài chính AI. Bạn có câu hỏi nào về các chỉ số tài chính hay tình hình kinh tế không?"}]
-        
+        try:
+            # Thêm dữ liệu đã xử lý vào ngữ cảnh chat ban đầu
+            initial_prompt = ""
+            if 'df_processed' in locals() and df_processed is not None:
+                initial_prompt = f"Dữ liệu Báo cáo Tài chính hiện tại (đã phân tích):\n{df_processed.to_markdown(index=False)}"
+            
+            st.session_state["chat_session"] = client.chats.create(
+                model=MODEL_NAME,
+                config={"system_instruction": SYSTEM_PROMPT}
+            )
+            # Gửi initial_prompt không hiển thị
+            if initial_prompt:
+                st.session_state["chat_session"].send_message(initial_prompt)
+
+            # Bổ sung tin nhắn chào mừng
+            st.session_state.messages = [{"role": "model", "content": "Xin chào! Tôi là Chuyên viên Tài chính AI. Bạn có câu hỏi nào về các chỉ số tài chính hay tình hình kinh tế không?"}]
+
+        except Exception as e:
+            st.error(f"Lỗi khởi tạo Chat Session: {e}")
+            st.session_state.messages = [{"role": "model", "content": "Lỗi: Không thể kết nối với Gemini AI."}]
+            
     # 2. Hiển thị lịch sử trò chuyện
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
